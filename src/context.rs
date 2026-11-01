@@ -294,9 +294,6 @@ impl Context {
             let back_buffer: sys::ID3D11Texture2D =
                 surface_ref.BeginDraw(None, &mut offset).unwrap();
 
-            // 3. SHIFT VIEWPORT BY THE ATLAS OFFSET POINT
-            // DirectComposition manages surfaces inside an internal atlas texture.
-            // Failing to offset TopLeftX and TopLeftY by update_offset breaks rendering projection coordinates.
             let viewport = sys::D3D11_VIEWPORT {
                 TopLeftX: offset.x as f32,
                 TopLeftY: offset.y as f32,
@@ -307,7 +304,6 @@ impl Context {
             };
             self.device_context.RSSetViewports(Some(&[viewport]));
 
-            // 4. Bind the surface texture slice directly into a standard render target view
             let mut rtv = None;
             self.device
                 .CreateRenderTargetView(&back_buffer, None, Some(&mut rtv))
