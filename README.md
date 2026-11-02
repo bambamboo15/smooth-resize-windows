@@ -4,4 +4,4 @@ This project implements **almost perfect smooth resizing** on Windows 11, not by
 
 People don't usually care if applications resize smoothly on Windows. My brother said he doesn't care what a window does while it's resizing, but I do. If anyone sees this repository, please feel free to test this project yourself and tell me how it goes :3
 
-*This proof-of-concept is intended for later versions of Windows 11. Building the project in debug mode without the DirectX debug layer installed will result in an error. This may not work perfectly on hybrid GPU systems. This repository was originally modeled after this [repository by @bigfatbrowncat](github.com/bigfatbrowncat/noflicker_directx_window), which provided many great ideas!*
+*This proof-of-concept is intended for later versions of Windows 11. Building the project in debug mode without the DirectX debug layer installed will result in an error. This may not work perfectly on hybrid GPU systems. This repository was originally modeled after [noflicker_directx_window](https://github.com/bigfatbrowncat/noflicker_directx_window) by [@bigfatbrowncat](https://github.com/bigfatbrowncat).*
