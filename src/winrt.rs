@@ -12,24 +12,23 @@ pub unsafe fn init_com_single_threaded() {
     }
 }
 
-type __SynchronizationObject = unsafe extern "system" fn(sys::HWND, *mut sys::HANDLE);
-type __LayoutSynchronization = unsafe extern "system" fn(sys::HWND, sys::BOOL);
+type InternalApis = (
+    /* GetResizeDCompositionSynchronizationObject */
+    unsafe extern "system" fn(sys::HWND, *mut sys::HANDLE),
+    /* EnableResizeLayoutSynchronization */
+    unsafe extern "system" fn(sys::HWND, sys::BOOL),
+);
 
-fn get_apis() -> &'static (__SynchronizationObject, __LayoutSynchronization) {
-    static APIS: OnceLock<Option<(__SynchronizationObject, __LayoutSynchronization)>> =
-        OnceLock::new();
+fn get_apis() -> &'static InternalApis {
+    static APIS: OnceLock<InternalApis> = OnceLock::new();
     APIS.get_or_init(|| unsafe {
-        let mut dll = sys::GetModuleHandleW(sys::w!("user32")).unwrap_or_default();
-        if dll.is_invalid() {
-            dll = sys::LoadLibraryExW(sys::w!("user32"), None, sys::LOAD_LIBRARY_FLAGS(0))
-                .unwrap_or_default();
-        }
-        let p1 = sys::GetProcAddress(dll, sys::PCSTR(2614 as *const u8))?;
-        let p2 = sys::GetProcAddress(dll, sys::PCSTR(2615 as *const u8))?;
-        Some((std::mem::transmute(p1), std::mem::transmute(p2)))
+        let dll = sys::GetModuleHandleW(sys::w!("user32"))
+            .or_else(|_| sys::LoadLibraryExW(sys::w!("user32"), None, sys::LOAD_LIBRARY_FLAGS(0)))
+            .unwrap();
+        let [p1, p2] = [2614, 2615]
+            .map(|ordinal| sys::GetProcAddress(dll, sys::PCSTR(ordinal as *const u8)).unwrap());
+        (std::mem::transmute(p1), std::mem::transmute(p2))
     })
-    .as_ref()
-    .unwrap()
 }
 
 /// When the window is marked as eligible for resize synchronization by calling
@@ -127,7 +126,7 @@ pub unsafe trait IDCompositionDesktopDevicePartner6: sys::IUnknown {
     unsafe fn __create_manipulation_transform(&self);
     unsafe fn __create_brightness_effect(&self);
     unsafe fn __create_color_matrix_effect(&self);
-    unsafe fn ____create_shadow_effect(&self);
+    unsafe fn __create_shadow_effect(&self);
     unsafe fn __create_hue_rotation_effect(&self);
     unsafe fn __create_saturation_effect(&self);
     unsafe fn __create_turbulence_effect(&self);

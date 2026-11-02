@@ -2,20 +2,30 @@ use crate::sys::{self, Interface};
 use crate::winrt;
 use std::cell::{Cell, RefCell};
 
-#[allow(dead_code, reason = "we just have to keep `dxgi_factory` and `target` alive")]
+#[allow(
+    dead_code,
+    reason = "we just have to keep `dxgi_factory` and `target` alive"
+)]
 pub struct Context {
     device: sys::ID3D11Device,
     dxgi_factory: sys::IDXGIFactory2,
-    surface: RefCell<sys::IDCompositionSurface>,
+    surface: RefCell<sys::IDCompositionVirtualSurface>,
     device_context: sys::ID3D11DeviceContext,
     width: Cell<u32>,
     height: Cell<u32>,
+
+    intel_adapter: Option<sys::IDXGIAdapter>,
 
     dcomp: sys::IDCompositionDevice,
     target: sys::IDCompositionTarget,
     visual: sys::IDCompositionVisual,
     pub partner: winrt::IDCompositionDesktopDevicePartner6,
     hwnd: sys::HWND,
+
+    vertex_shader: sys::ID3D11VertexShader,
+    pixel_shader: sys::ID3D11PixelShader,
+    input_layout: sys::ID3D11InputLayout,
+    vertex_buffer: Option<sys::ID3D11Buffer>,
 }
 
 impl Context {
@@ -27,17 +37,20 @@ impl Context {
             let dxgi_factory: sys::IDXGIFactory2 = sys::CreateDXGIFactory1().unwrap();
 
             let mut adapters = Vec::new();
+            let mut intel_adapter = None;
             let mut i = 0;
             while let Ok(adapter) = dxgi_factory.EnumAdapters(i) {
-                i += 1;
+                if adapter.GetDesc().unwrap().VendorId == 0x8086 {
+                    intel_adapter = Some(adapter.clone());
+                }
+
                 adapters.push(adapter);
+                i += 1;
             }
 
-            let mut flags = sys::D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+            let flags = sys::D3D11_CREATE_DEVICE_BGRA_SUPPORT;
             #[cfg(debug_assertions)]
-            {
-                flags |= sys::D3D11_CREATE_DEVICE_DEBUG;
-            }
+            let flags = flags | sys::D3D11_CREATE_DEVICE_DEBUG;
 
             let mut device: Option<sys::ID3D11Device> = None;
             let mut device_context: Option<sys::ID3D11DeviceContext> = None;
@@ -79,96 +92,53 @@ impl Context {
                 }
             }
             let surface = dcomp
-                .CreateSurface(
+                .CreateVirtualSurface(
                     (right - left) as u32,
                     (bottom - top) as u32,
                     sys::DXGI_FORMAT_B8G8R8A8_UNORM,
                     sys::DXGI_ALPHA_MODE_PREMULTIPLIED,
                 )
                 .unwrap();
-
             visual.SetContent(&surface).unwrap();
-            dcomp.Commit().unwrap();
 
-            Self {
-                device,
-                dxgi_factory,
-                device_context,
-                width: Cell::new(0),
-                height: Cell::new(0),
-                surface: RefCell::new(surface),
-                dcomp,
-                target,
-                visual,
-                partner,
-                hwnd,
-            }
-        }
-    }
+            // Compile the shaders and cache them so that drawing takes minimal time.
+            let vertices = [
+                SimpleVertex {
+                    position: [0.0, 0.5, 0.0],
+                    color: [1.0, 0.0, 0.0],
+                },
+                SimpleVertex {
+                    position: [0.5, -0.5, 0.0],
+                    color: [0.0, 1.0, 0.0],
+                },
+                SimpleVertex {
+                    position: [-0.5, -0.5, 0.0],
+                    color: [0.0, 0.0, 1.0],
+                },
+            ];
 
-    pub fn resize(&self, width: u32, height: u32) {
-        self.width.set(width);
-        self.height.set(height);
+            let shader_code = b"
+                struct VS_INPUT { 
+                    float3 Pos : POSITION; 
+                    float3 Color : COLOR; 
+                };
+                struct PS_INPUT { 
+                    float4 Pos : SV_POSITION; 
+                    float3 Color : COLOR; 
+                };
 
-        unsafe {
-            let handle = winrt::get_resize_dcomp_sync_object(self.hwnd);
+                PS_INPUT VSMain(VS_INPUT input) {
+                    PS_INPUT output;
+                    output.Pos = float4(input.Pos, 1.0f);
+                    output.Color = input.Color;
+                    return output;
+                }
 
-            if !(width == 0 || height == 0) {
-                let new_surface = self
-                    .dcomp
-                    .CreateSurface(
-                        width as u32,
-                        height as u32,
-                        sys::DXGI_FORMAT_B8G8R8A8_UNORM,
-                        sys::DXGI_ALPHA_MODE_PREMULTIPLIED,
-                    )
-                    .unwrap();
-                self.visual.SetContent(&new_surface).unwrap();
-                *self.surface.borrow_mut() = new_surface;
-                self.draw();
-            }
+                float4 PSMain(PS_INPUT input) : SV_Target {
+                    return float4(input.Color, 1.0f);
+                }
+            ";
 
-            self.partner.synchronized_commit(handle).unwrap();
-            winrt::signal_dcomp_resize_completion();
-        }
-    }
-
-    pub fn draw(&self) {
-        #[repr(C)]
-        struct SimpleVertex {
-            position: [f32; 3],
-            color: [f32; 3],
-        }
-
-        let vertices = [
-            SimpleVertex { position: [0.0, 0.5, 0.0],  color: [1.0, 0.0, 0.0] },
-            SimpleVertex { position: [0.5, -0.5, 0.0], color: [0.0, 1.0, 0.0] },
-            SimpleVertex { position: [-0.5, -0.5, 0.0], color: [0.0, 0.0, 1.0] },
-        ];
-
-        let shader_code = b"
-            struct VS_INPUT { 
-                float3 Pos : POSITION; 
-                float3 Color : COLOR; 
-            };
-            struct PS_INPUT { 
-                float4 Pos : SV_POSITION; 
-                float3 Color : COLOR; 
-            };
-
-            PS_INPUT VSMain(VS_INPUT input) {
-                PS_INPUT output;
-                output.Pos = float4(input.Pos, 1.0f);
-                output.Color = input.Color;
-                return output;
-            }
-
-            float4 PSMain(PS_INPUT input) : SV_Target {
-                return float4(input.Color, 1.0f);
-            }
-        ";
-
-        unsafe {
             let mut vs_blob = None;
             let mut ps_blob = None;
 
@@ -189,6 +159,7 @@ impl Context {
                 None,
             )
             .unwrap();
+
             sys::D3DCompile2(
                 shader_code.as_ptr() as *const _,
                 shader_code.len(),
@@ -212,6 +183,7 @@ impl Context {
                 vs_blob.GetBufferPointer() as *const _,
                 vs_blob.GetBufferSize(),
             );
+
             let ps_blob = ps_blob.unwrap();
             let ps_data = std::slice::from_raw_parts(
                 ps_blob.GetBufferPointer() as *const _,
@@ -223,10 +195,10 @@ impl Context {
             let mut input_layout = None;
             let mut vertex_buffer = None;
 
-            self.device
+            device
                 .CreateVertexShader(vs_data, None, Some(&mut vertex_shader))
                 .unwrap();
-            self.device
+            device
                 .CreatePixelShader(ps_data, None, Some(&mut pixel_shader))
                 .unwrap();
 
@@ -250,7 +222,7 @@ impl Context {
                     InstanceDataStepRate: 0,
                 },
             ];
-            self.device
+            device
                 .CreateInputLayout(&element_desc, vs_data, Some(&mut input_layout))
                 .unwrap();
 
@@ -267,7 +239,7 @@ impl Context {
                 SysMemPitch: 0,
                 SysMemSlicePitch: 0,
             };
-            self.device
+            device
                 .CreateBuffer(
                     &buffer_desc,
                     Some(&subresource_data),
@@ -275,19 +247,79 @@ impl Context {
                 )
                 .unwrap();
 
+            Self {
+                device,
+                dxgi_factory,
+                device_context,
+                width: Cell::new(0),
+                height: Cell::new(0),
+                surface: RefCell::new(surface),
+                intel_adapter,
+                dcomp,
+                target,
+                visual,
+                partner,
+                hwnd,
+                vertex_shader: vertex_shader.unwrap(),
+                pixel_shader: pixel_shader.unwrap(),
+                input_layout: input_layout.unwrap(),
+                vertex_buffer,
+            }
+        }
+    }
+
+    pub fn resize(&self, width: u32, height: u32) {
+        self.width.set(width);
+        self.height.set(height);
+
+        unsafe {
+            let handle = winrt::get_resize_dcomp_sync_object(self.hwnd);
+
+            if !(width == 0 || height == 0) {
+                self.surface.borrow().Resize(width, height).unwrap();
+                self.draw();
+            }
+
+            // Some systems (like laptops) have a low-power iGPU alongside the dedicated GPU.
+            // For some reason, when this combination happens, flickers happen. This lowers
+            // the chance of a flicker happening to about 1% in those cases.
+            //
+            // Thanks so much, @bigfatbrowncat!
+            // https://github.com/bigfatbrowncat/noflicker_directx_window/blob/master/D3DContextBase.cpp#L80
+            if let Some(intel_adapter) = &self.intel_adapter {
+                let monitor = sys::MonitorFromWindow(self.hwnd, sys::MONITOR_DEFAULTTONEAREST);
+
+                let mut i = 0;
+                while let Ok(output) = intel_adapter.EnumOutputs(i) {
+                    if let Ok(desc) = output.GetDesc()
+                        && desc.Monitor == monitor
+                    {
+                        let _ = output.WaitForVBlank();
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+
+            self.partner.synchronized_commit(handle).unwrap();
+            winrt::signal_dcomp_resize_completion();
+        }
+    }
+
+    pub fn draw(&self) {
+        unsafe {
             let stride = std::mem::size_of::<SimpleVertex>() as u32;
             let offset = 0;
             self.device_context.IASetVertexBuffers(
                 0,
                 1,
-                Some(&vertex_buffer),
+                Some(&self.vertex_buffer),
                 Some(&stride),
                 Some(&offset),
             );
-            self.device_context.IASetInputLayout(input_layout.as_ref());
-            self.device_context
-                .VSSetShader(vertex_shader.as_ref(), None);
-            self.device_context.PSSetShader(pixel_shader.as_ref(), None);
+            self.device_context.IASetInputLayout(&self.input_layout);
+            self.device_context.VSSetShader(&self.vertex_shader, None);
+            self.device_context.PSSetShader(&self.pixel_shader, None);
 
             let surface_ref = self.surface.borrow();
             let mut offset = sys::POINT::default();
@@ -321,4 +353,10 @@ impl Context {
             surface_ref.EndDraw().unwrap();
         }
     }
+}
+
+#[repr(C)]
+struct SimpleVertex {
+    position: [f32; 3],
+    color: [f32; 3],
 }

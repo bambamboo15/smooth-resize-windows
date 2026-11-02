@@ -5,8 +5,9 @@ mod sys {
         UI::Core::*, Win32::Foundation::*, Win32::Graphics::Direct3D::Fxc::*,
         Win32::Graphics::Direct3D::*, Win32::Graphics::Direct3D11::*,
         Win32::Graphics::DirectComposition::*, Win32::Graphics::Dxgi::Common::*,
-        Win32::Graphics::Dxgi::*, Win32::System::Com::*, Win32::System::LibraryLoader::*,
-        Win32::System::WinRT::*, Win32::UI::WindowsAndMessaging::*, core::*,
+        Win32::Graphics::Dxgi::*, Win32::Graphics::Gdi::*, Win32::System::Com::*,
+        Win32::System::LibraryLoader::*, Win32::System::WinRT::*,
+        Win32::UI::WindowsAndMessaging::*, core::*,
     };
 }
 
