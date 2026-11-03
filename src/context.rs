@@ -1,15 +1,11 @@
 use crate::sys::{self, Interface};
 use crate::winrt;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 
-#[allow(
-    dead_code,
-    reason = "we just have to keep `dxgi_factory` and `target` alive"
-)]
+#[allow(dead_code, reason = "we just have to keep `target` alive")]
 pub struct Context {
     device: sys::ID3D11Device,
-    dxgi_factory: sys::IDXGIFactory2,
-    surface: RefCell<sys::IDCompositionVirtualSurface>,
+    surface: sys::IDCompositionVirtualSurface,
     device_context: sys::ID3D11DeviceContext,
     width: Cell<u32>,
     height: Cell<u32>,
@@ -41,6 +37,7 @@ impl Context {
             let mut i = 0;
             while let Ok(adapter) = dxgi_factory.EnumAdapters(i) {
                 if adapter.GetDesc().unwrap().VendorId == 0x8086 {
+                    println!("Intel adapter detected");
                     intel_adapter = Some(adapter.clone());
                 }
 
@@ -78,6 +75,24 @@ impl Context {
             let target: sys::IDCompositionTarget = dcomp.CreateTargetForHwnd(hwnd, false).unwrap();
             let visual: sys::IDCompositionVisual = dcomp.CreateVisual().unwrap();
             target.SetRoot(&visual).unwrap();
+
+            // DEBUGGING: Print basic GPU statistics on the terminal.
+            let dxgi_adapter = dxgi_device.GetAdapter().unwrap();
+            let dxgi_adapter1: sys::IDXGIAdapter1 = dxgi_adapter.cast().unwrap();
+            let desc = dxgi_adapter1.GetDesc1().unwrap();
+            let len = (desc.Description)
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(desc.Description.len());
+            let gpu_name = String::from_utf16(&desc.Description[..len])
+                .unwrap_or_else(|_| "Unknown".to_string());
+            let is_software = (desc.Flags & (sys::DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32)) != 0;
+            println!("Active GPU selected");
+            println!("Name: {gpu_name}");
+            println!(
+                "Type: {}",
+                if is_software { "Software" } else { "Hardware" }
+            );
 
             let (mut left, mut top, mut right, mut bottom) = (0, 0, 0, 0);
             for adapter in &adapters {
@@ -249,11 +264,10 @@ impl Context {
 
             Self {
                 device,
-                dxgi_factory,
                 device_context,
                 width: Cell::new(0),
                 height: Cell::new(0),
-                surface: RefCell::new(surface),
+                surface,
                 intel_adapter,
                 dcomp,
                 target,
@@ -276,7 +290,7 @@ impl Context {
             let handle = winrt::get_resize_dcomp_sync_object(self.hwnd);
 
             if !(width == 0 || height == 0) {
-                self.surface.borrow().Resize(width, height).unwrap();
+                self.surface.Resize(width, height).unwrap();
                 self.draw();
             }
 
@@ -284,7 +298,6 @@ impl Context {
             // For some reason, when this combination happens, flickers happen. This lowers
             // the chance of a flicker happening to about 1% in those cases.
             //
-            // Thanks so much, @bigfatbrowncat!
             // https://github.com/bigfatbrowncat/noflicker_directx_window/blob/master/D3DContextBase.cpp#L80
             if let Some(intel_adapter) = &self.intel_adapter {
                 let monitor = sys::MonitorFromWindow(self.hwnd, sys::MONITOR_DEFAULTTONEAREST);
@@ -321,10 +334,9 @@ impl Context {
             self.device_context.VSSetShader(&self.vertex_shader, None);
             self.device_context.PSSetShader(&self.pixel_shader, None);
 
-            let surface_ref = self.surface.borrow();
             let mut offset = sys::POINT::default();
             let back_buffer: sys::ID3D11Texture2D =
-                surface_ref.BeginDraw(None, &mut offset).unwrap();
+                self.surface.BeginDraw(None, &mut offset).unwrap();
 
             let viewport = sys::D3D11_VIEWPORT {
                 TopLeftX: offset.x as f32,
@@ -350,7 +362,34 @@ impl Context {
                 .IASetPrimitiveTopology(sys::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             self.device_context.Draw(3, 0);
 
-            surface_ref.EndDraw().unwrap();
+            // We flush the commands to the GPU, then poll until they are processed, so that when
+            // we report resize as done, the contents are already rendered to the surface.
+            let mut query = None;
+            self.device
+                .CreateQuery(
+                    &sys::D3D11_QUERY_DESC {
+                        Query: sys::D3D11_QUERY_EVENT,
+                        MiscFlags: 0,
+                    },
+                    Some(&mut query),
+                )
+                .unwrap();
+            let query = query.unwrap();
+            self.device_context.End(&query);
+            self.device_context.Flush();
+            while (self.device_context.vtable().GetData)(
+                self.device_context.as_raw(),
+                query.as_raw(),
+                std::ptr::null_mut(),
+                0,
+                0,
+            )
+            .0 != sys::S_OK.0
+            {
+                std::thread::yield_now();
+            }
+
+            self.surface.EndDraw().unwrap();
         }
     }
 }

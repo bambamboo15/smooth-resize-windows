@@ -29,8 +29,14 @@ unsafe extern "system" fn window_proc(
 
                 let ptr = sys::GetWindowLongPtrW(hwnd, sys::WINDOW_LONG_PTR_INDEX(0));
                 if ptr != 0 {
+                    // DEBUGGING: Measure how long the window takes to resize.
+                    let start = std::time::Instant::now();
+
                     let context: &context::Context = &*(ptr as *const _);
                     context.resize(width as u32, height as u32);
+
+                    let ms = start.elapsed().as_secs_f32() * 1000.0;
+                    println!(" + {ms}ms");
                 }
 
                 sys::LRESULT(0)
