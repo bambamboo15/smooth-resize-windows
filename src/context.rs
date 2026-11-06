@@ -34,15 +34,13 @@ impl Context {
 
             let mut adapters = Vec::new();
             let mut intel_adapter = None;
-            let mut i = 0;
-            while let Ok(adapter) = dxgi_factory.EnumAdapters(i) {
+            while let Ok(adapter) = dxgi_factory.EnumAdapters(adapters.len() as u32) {
                 if adapter.GetDesc().unwrap().VendorId == 0x8086 {
                     println!("Intel adapter detected");
                     intel_adapter = Some(adapter.clone());
                 }
 
                 adapters.push(adapter);
-                i += 1;
             }
 
             let flags = sys::D3D11_CREATE_DEVICE_BGRA_SUPPORT;
@@ -94,22 +92,10 @@ impl Context {
                 if is_software { "Software" } else { "Hardware" }
             );
 
-            let (mut left, mut top, mut right, mut bottom) = (0, 0, 0, 0);
-            for adapter in &adapters {
-                let mut i = 0;
-                while let Ok(output) = adapter.EnumOutputs(i) {
-                    let output_desc = output.GetDesc().unwrap();
-                    left = std::cmp::min(left, output_desc.DesktopCoordinates.left);
-                    top = std::cmp::min(top, output_desc.DesktopCoordinates.top);
-                    right = std::cmp::max(right, output_desc.DesktopCoordinates.right);
-                    bottom = std::cmp::max(bottom, output_desc.DesktopCoordinates.bottom);
-                    i += 1;
-                }
-            }
             let surface = dcomp
                 .CreateVirtualSurface(
-                    (right - left) as u32,
-                    (bottom - top) as u32,
+                    1,
+                    1,
                     sys::DXGI_FORMAT_B8G8R8A8_UNORM,
                     sys::DXGI_ALPHA_MODE_PREMULTIPLIED,
                 )
