@@ -4,7 +4,7 @@ use std::cell::Cell;
 
 #[allow(dead_code, reason = "keep some objects alive")]
 pub struct Context {
-    compositor_context: proj::CompositorContext,
+    pub compositor_context: proj::CompositorContext,
     target: sys::DesktopWindowTarget,
     visual: sys::SpriteVisual,
     surface: sys::CompositionDrawingSurface,
@@ -14,7 +14,6 @@ pub struct Context {
     height: Cell<u32>,
     hwnd: sys::HWND,
 
-    pub partner: proj::IDCompositionDesktopDevicePartner6,
     pub resize_sync: sys::HANDLE,
     pub resize_queued: bool,
     pub between_frames: u32,
@@ -50,11 +49,6 @@ impl Context {
             visual.SetBrush(&brush).unwrap();
             target.SetRoot(&visual).unwrap();
 
-            let partner = compositor_context
-                .compositor
-                .cast::<proj::IDCompositionDesktopDevicePartner6>()
-                .unwrap();
-
             Self {
                 compositor_context,
                 brush,
@@ -65,7 +59,6 @@ impl Context {
                 width: Cell::new(0),
                 height: Cell::new(0),
                 hwnd,
-                partner,
                 resize_sync: Default::default(),
                 resize_queued: false,
                 between_frames: 1,

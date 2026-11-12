@@ -38,22 +38,8 @@ fn get_apis() -> &'static InternalApis {
     })
 }
 
-/// Obtains the synchronization handle for a window.
-pub unsafe fn get_resize_dcomp_sync_object(hwnd: sys::HWND) -> sys::HANDLE {
-    let mut handle: sys::HANDLE = Default::default();
-    let (__get_resize_dcomposition_synchronization_object, _, _) = get_apis();
-    unsafe { __get_resize_dcomposition_synchronization_object(hwnd, &mut handle) }.unwrap();
-    handle
-}
-
-/// Signal to the compositor that resize has been completed.
-pub unsafe fn layout_completed(hwnd: sys::HWND) {
-    let (_, _, __layout_completed) = get_apis();
-    unsafe { __layout_completed(hwnd) }.unwrap();
-}
-
 #[sys::interface("E01EB649-787E-4560-B398-0DE7A2065D8B")]
-pub unsafe trait IDCompositionDesktopDevicePartner6: sys::IUnknown {
+unsafe trait IDCompositionDesktopDevicePartner6: sys::IUnknown {
     unsafe fn __commit(&self);
     unsafe fn __wait_for_commit_completion(&self);
     unsafe fn __get_frame_statistics(&self);
@@ -148,6 +134,8 @@ pub struct CompositorContext {
     #[allow(unused)]
     d2d_device: sys::ID2D1Device,
     pub graphics_device: sys::CompositionGraphicsDevice,
+    partner: IDCompositionDesktopDevicePartner6,
+    hwnd: sys::HWND,
 }
 
 impl CompositorContext {
@@ -223,11 +211,34 @@ impl CompositorContext {
         let interop: sys::ICompositorInterop = compositor.cast().unwrap();
         let graphics_device = unsafe { interop.CreateGraphicsDevice(&d2d_device) }.unwrap();
 
+        let partner: IDCompositionDesktopDevicePartner6 = compositor.cast().unwrap();
+
         Self {
             compositor,
             dispatcher_queue,
             d2d_device,
             graphics_device,
+            partner,
+            hwnd,
         }
+    }
+
+    /// Obtains the synchronization handle for this window.
+    pub unsafe fn get_sync_handle(&self) -> sys::HANDLE {
+        let mut handle: sys::HANDLE = Default::default();
+        let (__get_resize_dcomposition_synchronization_object, _, _) = get_apis();
+        unsafe { __get_resize_dcomposition_synchronization_object(self.hwnd, &mut handle) }.unwrap();
+        handle
+    }
+
+    /// Signal to the compositor that resize has been completed.
+    pub unsafe fn layout_completed(&self) {
+        let (_, _, __layout_completed) = get_apis();
+        unsafe { __layout_completed(self.hwnd) }.unwrap();
+    }
+
+    /// Perform a synchronized commit.
+    pub unsafe fn synchronized_commit(&self, handle: sys::HANDLE) {
+        unsafe { self.partner.synchronized_commit(handle) }.unwrap();
     }
 }

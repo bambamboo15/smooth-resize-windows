@@ -28,6 +28,19 @@ unsafe extern "system" fn window_proc(
                 sys::PostQuitMessage(0);
                 sys::LRESULT(0)
             }
+            sys::WM_SIZE | sys::WM_PAINT => {
+                let mut ps = sys::PAINTSTRUCT::default();
+                sys::BeginPaint(hwnd, &mut ps);
+                if let Some(context) = context_ptr.as_mut() {
+                    let between_frames = context.between_frames;
+                    context.between_frames = 0;
+                    context.update();
+                    context.between_frames = between_frames;
+                }
+                sys::EndPaint(hwnd, &ps).unwrap();
+                sys::DwmFlush().unwrap();
+                sys::LRESULT(0)
+            }
             sys::WM_WINDOWPOSCHANGED => {
                 let pos = &*(lparam.0 as *const sys::WINDOWPOS);
                 if pos.flags.0 & sys::SWP_NOSIZE.0 != 0 {
@@ -35,7 +48,7 @@ unsafe extern "system" fn window_proc(
                 }
 
                 if let Some(context) = context_ptr.as_mut() {
-                    let sync = proj::get_resize_dcomp_sync_object(hwnd);
+                    let sync = context.compositor_context.get_sync_handle();
                     if !context.resize_sync.is_invalid() {
                         sys::CloseHandle(context.resize_sync).unwrap();
                     }
@@ -55,19 +68,6 @@ unsafe extern "system" fn window_proc(
                 }
                 sys::LRESULT(0)
             }
-            sys::WM_SIZE | sys::WM_PAINT => {
-                let mut ps = sys::PAINTSTRUCT::default();
-                sys::BeginPaint(hwnd, &mut ps);
-                if let Some(context) = context_ptr.as_mut() {
-                    let between_frames = context.between_frames;
-                    context.between_frames = 0;
-                    context.update();
-                    context.between_frames = between_frames;
-                }
-                sys::EndPaint(hwnd, &ps).unwrap();
-                sys::DwmFlush().unwrap();
-                sys::LRESULT(0)
-            }
             WM_APP_RESIZE_RENDER => {
                 if let Some(context) = context_ptr.as_mut()
                     && context.resize_queued
@@ -83,11 +83,11 @@ unsafe extern "system" fn window_proc(
                         sys::ValidateRect(Some(hwnd), None).unwrap();
                     }
 
-                    context.partner.synchronized_commit(sync).unwrap();
+                    context.compositor_context.synchronized_commit(sync);
                     if !sync.is_invalid() {
                         sys::CloseHandle(sync).unwrap();
                     }
-                    proj::layout_completed(hwnd);
+                    context.compositor_context.layout_completed();
                 }
                 sys::LRESULT(0)
             }
